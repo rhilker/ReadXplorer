@@ -51,6 +51,8 @@
         <module>lib.geneticcodes</module>
         <module>lib.parser.fasta</module>
         <module>lib.utilities</module>
+        <module>lib.parser.embl</module>
+        <module>lib.intervals</module>
     </modules>
 
 
