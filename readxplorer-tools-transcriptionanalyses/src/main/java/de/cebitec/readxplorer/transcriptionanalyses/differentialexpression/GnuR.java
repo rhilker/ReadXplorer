@@ -21,6 +21,7 @@ package de.cebitec.readxplorer.transcriptionanalyses.differentialexpression;
 import de.cebitec.readxplorer.api.constants.RServe;
 import de.cebitec.readxplorer.utils.OsUtils;
 import de.cebitec.readxplorer.utils.PasswordStore;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -47,6 +48,7 @@ import org.rosuda.REngine.REXP;
 import org.rosuda.REngine.REXPMismatchException;
 import org.rosuda.REngine.REngineException;
 import org.rosuda.REngine.Rserve.RConnection;
+import org.rosuda.REngine.Rserve.RFileInputStream;
 import org.rosuda.REngine.Rserve.RserveException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,17 +61,14 @@ import org.slf4j.LoggerFactory;
  */
 public final class GnuR extends RConnection {
 
-    /**
-     * The Cran Mirror used to receive additional packages.
-     */
-    private String cranMirror;
-
     final boolean runningLocal;
 
     /* Is there already a instance running that we can connect to? This is only
      * interesting for manual setup on Unix hosts.
      */
-    private static int connectableInstanceRunning = 0;
+    private static boolean isConnectableInstanceRunning = false;
+
+    private static int numberOfActiveConnections = 0;
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -103,10 +102,29 @@ public final class GnuR extends RConnection {
      * <p>
      * @param saveFile File the memory image should be saved to
      */
-    public void saveDataToFile( File saveFile ) throws RserveException {
-        String path = saveFile.getAbsolutePath();
-        path = path.replace( "\\", "/" );
-        this.eval( "save.image(\"" + path + "\")" );
+    public void saveDataToFile( File saveFile ) throws RserveException, REXPMismatchException, IOException {
+
+        if( runningLocal ) {
+            String path = saveFile.getAbsolutePath();
+            path = path.replace( "\\", "/" );
+            this.eval( "save.image(\"" + path + "\")" );
+        } else {
+            byte[] b = new byte[8192];
+            this.eval( "tmpFile <- tempfile(pattern =\"ReadXplorer_data_\", tmpdir = tempdir(), fileext =\".rdata\")" );
+            this.eval( "save.image(tmpFile)" );
+            String tmpFilePath = this.eval( "tmpFile" ).asString();
+            RFileInputStream input;
+            try (BufferedOutputStream output = new BufferedOutputStream( new FileOutputStream( saveFile ) )) {
+                input = this.openFile( tmpFilePath );
+                int c = input.read( b );
+                while( c >= 0 ) {
+                    output.write( b, 0, c );
+                    c = input.read( b );
+                }
+            }
+            input.close();
+            this.eval( "unlink(tmpFile)" );
+        }
     }
 
 
@@ -158,13 +176,14 @@ public final class GnuR extends RConnection {
 
 
     @Override
-    public void shutdown() throws RserveException {
+    public synchronized void shutdown() throws RserveException {
         //If we started the RServe instace by our self we should also terminate it.
         //If we are connected to a remote server however we should not do so.
         if( runningLocal ) {
-            super.shutdown();
-            if( connectableInstanceRunning > 0 ) {
-                connectableInstanceRunning--;
+            numberOfActiveConnections--;
+            if( numberOfActiveConnections == 0 ) {
+                isConnectableInstanceRunning = false;
+                super.shutdown();
             }
         }
     }
@@ -251,8 +270,8 @@ public final class GnuR extends RConnection {
         GnuR instance;
         String host;
         int port;
-        boolean manualLocalSetup = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_MANUAL_LOCAL_SETUP, false );
-        boolean manualRemoteSetup = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_MANUAL_REMOTE_SETUP, false );
+        boolean useStartupScript = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_MANUAL_LOCAL_SETUP, false );
+        boolean remoteSetup = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_MANUAL_REMOTE_SETUP, false );
         boolean useAuth = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_USE_AUTH, false );
         File cebitecIndicator = new File( "/vol/readxplorer/R/CeBiTecMode" );
         if( cebitecIndicator.exists() ) {
@@ -262,33 +281,10 @@ public final class GnuR extends RConnection {
             }
             instance = new GnuR( ip, 6311, false, processingLog );
             instance.login( "readxplorer", "DEfq984Fue3Xor81905jft249" );
-//        } else if( OsUtils.isMac() ) {
-//            port = 6311;
-//            final Process rserveProcess;
-//            host = "localhost";
-//            File rserveBinary = InstalledFileLocator.getDefault().locate( "modules/R/library/Rserve/libs/Rserve", "de.cebitec.readxplorer.transcriptionanalyses", false );
-//            rserveBinary.setExecutable( true );
-//            File rBinary = InstalledFileLocator.getDefault().locate( "modules/R/bin/R", "de.cebitec.readxplorer.transcriptionanalyses", false );
-//            rBinary.setExecutable( true );
-//            File startUpScript = InstalledFileLocator.getDefault().locate( "modules/R/startup.sh", "de.cebitec.readxplorer.transcriptionanalyses", false );
-//            startUpScript.setExecutable( true );
-//            rserveProcess = launchStartUpScript( startUpScript, port, processingLog );
-//            connectableInstanceRunning++;
-//            if( rserveProcess != null && (rserveProcess.exitValue() == 0) ) {
-//                instance = new GnuR( host, port, !manualRemoteSetup, processingLog );
-//                if( useAuth ) {
-//                    String user = NbPreferences.forModule( Object.class ).get( RServe.RSERVE_USER, "" );
-//                    String password = new String( PasswordStore.read( RServe.RSERVE_PASSWORD ) );
-//                    instance.login( user, password );
-//                }
-//            } else {
-//                throw new IOException( "Could not start Rserve instance!" );
-//            }
-
-        } else if( manualRemoteSetup ) {
+        } else if( remoteSetup || OsUtils.isMac() ) {
             port = NbPreferences.forModule( Object.class ).getInt( RServe.RSERVE_PORT, 6311 );
             host = NbPreferences.forModule( Object.class ).get( RServe.RSERVE_HOST, "localhost" );
-            instance = new GnuR( host, port, !manualRemoteSetup, processingLog );
+            instance = new GnuR( host, port, false, processingLog );
             if( useAuth ) {
                 String user = NbPreferences.forModule( Object.class ).get( RServe.RSERVE_USER, "" );
                 String password = new String( PasswordStore.read( RServe.RSERVE_PASSWORD ) );
@@ -299,24 +295,28 @@ public final class GnuR extends RConnection {
             final Process rserveProcess;
             host = "localhost";
 
-            if( manualLocalSetup ) {
+            if( useStartupScript ) {
                 port = NbPreferences.forModule( Object.class ).getInt( RServe.RSERVE_PORT, 6311 );
-                if( !((OsUtils.isLinux() || OsUtils.isMac()) && (connectableInstanceRunning > 0)) ) {
+                if( !(OsUtils.isLinux() && isConnectableInstanceRunning) ) {
                     File startUpScript = new File( NbPreferences.forModule( Object.class ).get( RServe.RSERVE_STARTUP_SCRIPT, "" ) );
                     rserveProcess = launchStartUpScript( startUpScript, port, processingLog );
-                    connectableInstanceRunning++;
-                } else {
-                    rserveProcess = null;
+                    if( rserveProcess != null && (rserveProcess.exitValue() == 0) ) {
+                        isConnectableInstanceRunning = true;
+                    } else {
+                        throw new IOException( "Could not start Rserve instance!" );
+                    }
                 }
-                if( rserveProcess != null && (rserveProcess.exitValue() == 0) ) {
-                    instance = new GnuR( host, port, !manualRemoteSetup, processingLog );
+
+                if( isConnectableInstanceRunning ) {
+                    instance = new GnuR( host, port, !remoteSetup, processingLog );
                     if( useAuth ) {
                         String user = NbPreferences.forModule( Object.class ).get( RServe.RSERVE_USER, "" );
                         String password = new String( PasswordStore.read( RServe.RSERVE_PASSWORD ) );
                         instance.login( user, password );
                     }
+                    numberOfActiveConnections++;
                 } else {
-                    throw new IOException( "Could not start Rserve instance!" );
+                    throw new IOException( "Could not log into running RServe instance!" );
                 }
             } else {
                 port = nextFreePort++;
@@ -355,7 +355,7 @@ public final class GnuR extends RConnection {
                     rserveProcess = null;
                 }
                 if( rserveProcess != null && rserveProcess.isAlive() ) {
-                    instance = new GnuR( host, port, !manualRemoteSetup, processingLog );
+                    instance = new GnuR( host, port, !remoteSetup, processingLog );
                     instance.login( user, password );
 //                        instance.setDefaultCranMirror();
                 } else {
@@ -427,8 +427,7 @@ public final class GnuR extends RConnection {
 
     public static boolean gnuRSetupCorrect() {
         File cebitecIndicator = new File( "/vol/readxplorer/R/CeBiTecMode" );
-//        if( cebitecIndicator.exists() || OsUtils.isMac() ) {
-        if( cebitecIndicator.exists()) {
+        if( cebitecIndicator.exists() ) {
             return true;
         }
         boolean manualLocalSetup = NbPreferences.forModule( Object.class ).getBoolean( RServe.RSERVE_MANUAL_LOCAL_SETUP, false );

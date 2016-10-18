@@ -50,7 +50,7 @@ public class BaySeqAnalysisHandler extends DeAnalysisHandler {
         Priors( "Priors" ),
         MACD( "\"MA\"-Plot for the count data" ),
         Posteriors( "Posterior likelihoods of differential expression against log-ratio" );
-        String representation;
+        private final String representation;
 
 
         Plot( String representation ) {
@@ -61,6 +61,11 @@ public class BaySeqAnalysisHandler extends DeAnalysisHandler {
         @Override
         public String toString() {
             return representation;
+        }
+
+
+        public static Plot[] getValues() {
+            return Plot.values();
         }
 
 

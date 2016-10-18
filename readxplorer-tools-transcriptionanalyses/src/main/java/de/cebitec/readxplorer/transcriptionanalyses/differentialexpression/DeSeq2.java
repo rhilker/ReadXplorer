@@ -97,12 +97,6 @@ public class DeSeq2 {
             }
             concatenate.deleteCharAt( concatenate.length() - 1 );
 
-            if( saveFile != null ) {
-                String path = saveFile.getAbsolutePath();
-                path = path.replace( "\\", "\\\\" );
-                gnuR.eval( "save.image(\"" + path + "\")" );
-            }
-
             if( analysisData.moreThanTwoConditions() ) {
                 LOG.info( "moreThanTwoConditions is still a TODO" );
                 //TODO
@@ -126,10 +120,9 @@ public class DeSeq2 {
             results.add( new ResultDeAnalysis( tableContents1, colNames1, rowNames1, "Results", analysisData ) );
 
             if( saveFile != null ) {
-                String path = saveFile.getAbsolutePath();
-                path = path.replace( "\\", "\\\\" );
-                gnuR.eval( "save.image(\"" + path + "\")" );
+                gnuR.saveDataToFile( saveFile );
             }
+
         } catch( Exception e ) {
             //We don't know what errors Gnu R might cause, so we have to catch all.
             //The newly generated exception can than be caught and handelt by the DeAnalysisHandler
@@ -172,10 +165,18 @@ public class DeSeq2 {
                                              RserveException, REngineException, REXPMismatchException, IOException {
         gnuR.storePlot( file, "hist(res$pval, breaks=100, col=\"skyblue\", border=\"slateblue\", main=\"\")" );
     }
-    
-    public void plotMA( File file ) throws IllegalStateException, PackageNotLoadableException,
+
+
+    public void plotPadjHist( File file ) throws IllegalStateException, PackageNotLoadableException,
                                              RserveException, REngineException, REXPMismatchException, IOException {
+        gnuR.storePlot( file, "hist(res$padj, breaks=100, col=\"skyblue\", border=\"slateblue\", main=\"\")" );
+    }
+
+
+    public void plotMA( File file ) throws IllegalStateException, PackageNotLoadableException,
+                                           RserveException, REngineException, REXPMismatchException, IOException {
         gnuR.storePlot( file, "plotMA(res, main=\"\")" );
     }
-    
+
+
 }
